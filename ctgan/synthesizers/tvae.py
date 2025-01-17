@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import torch
+import time
 from torch.nn import Linear, Module, Parameter, ReLU, Sequential
 from torch.nn.functional import cross_entropy
 from torch.optim import Adam
@@ -213,6 +214,7 @@ class TVAE(BaseSynthesizer):
                     iterator_description.format(loss=loss.detach().cpu().item())
                 )
 
+
     @random_state
     def sample(self, samples):
         """Sample data similar to the training data.
@@ -227,7 +229,7 @@ class TVAE(BaseSynthesizer):
         self.decoder.eval()
 
         steps = samples // self.batch_size + 1
-        data = []
+        data = [] 
         for _ in range(steps):
             mean = torch.zeros(self.batch_size, self.embedding_dim)
             std = mean + 1
@@ -244,3 +246,65 @@ class TVAE(BaseSynthesizer):
         """Set the `device` to be used ('GPU' or 'CPU)."""
         self._device = device
         self.decoder.to(self._device)
+
+    @random_state
+    def benchmark(self, samples, half=False):
+        """Sample data similar to the training data.
+
+        Args:
+            samples (int):
+                Number of rows to sample.
+
+        Returns:
+            numpy.ndarray or pandas.DataFrame
+        """
+        self.decoder.eval()
+
+        if half:
+            self.decoder.half()
+
+        for _ in range(10):
+            mean = torch.zeros(self.batch_size, self.embedding_dim)
+            std = mean + 1
+            noise = torch.normal(mean=mean, std=std).to(self._device)
+            if half:
+                noise = noise.half()
+            fake, sigmas = self.decoder(noise)
+
+        steps = samples // self.batch_size + 1
+        data = []
+        sampling_latency = []
+        decoder_latency = []
+        for _ in range(steps):
+            start_decode = torch.cuda.Event(enable_timing=True)
+            end_decode = torch.cuda.Event(enable_timing=True)
+
+            t0 = time.time_ns()
+            mean = torch.zeros(self.batch_size, self.embedding_dim)
+            std = mean + 1
+            noise = torch.normal(mean=mean, std=std).to(self._device)
+            t1 = time.time_ns()
+            if half:
+                noise = noise.half()
+            start_decode.record()
+            fake, sigmas = self.decoder(noise)
+            fake = torch.tanh(fake)
+            end_decode.record()
+            torch.cuda.synchronize()
+            elapsed_time_ms = start_decode.elapsed_time(end_decode)
+            
+            data.append(fake.detach().cpu().numpy())
+            sampling_latency.append(t1 - t0)
+            decoder_latency.append(elapsed_time_ms)
+
+        data = np.concatenate(data, axis=0)
+        data = data[:samples]
+
+        t2 = time.time_ns()
+        generated_table = self.transformer.inverse_transform(data, sigmas.detach().cpu().numpy())
+        t3 = time.time_ns()
+        inverse_transform_latency = (t3 - t2)/1e9 # ns -> s
+        sl = sum(sampling_latency)/1e9 # ns -> s
+        dl = sum(decoder_latency)/1e3 # s
+                
+        return sl, dl, inverse_transform_latency
