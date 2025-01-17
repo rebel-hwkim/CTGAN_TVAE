@@ -24,7 +24,7 @@ tvae = TVAE(epochs=10, batch_size=batch_size, embedding_dim=embedding_dim, cuda=
 tvae.transformer = DataTransformer()
 tvae.transformer.fit(real_data, discrete_columns)
 tvae.decoder = Decoder(tvae.embedding_dim, tvae.decompress_dims, tvae.transformer.output_dimensions).to(tvae._device)
-tvae.decoder.load_state_dict(torch.load('decoder_156.pt'))
+tvae.decoder.load_state_dict(torch.load('decoder_128.pt'))
 
 synthetic_data = tvae.sample(1024)
 print(synthetic_data)
